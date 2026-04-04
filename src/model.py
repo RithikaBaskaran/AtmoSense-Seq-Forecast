@@ -1,13 +1,11 @@
 """
 model.py 
-India AQI Transformer Project  |  AtmoSense-Seq-Forecast
 
 Exports:
     PositionalEncoding : sinusoidal positional encoding module
     AQITransformer     : encoder-decoder transformer for multi-pollutant forecasting
 
-Usage (Person 3 in train.py):
-    from model import AQITransformer
+
 
     model = AQITransformer(
         n_features = len(feat_cols),
