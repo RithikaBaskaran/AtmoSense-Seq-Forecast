@@ -1,24 +1,5 @@
-"""
-dataset.py — Person 1 deliverable
-India AQI Transformer Project
+ 
 
-Multi-target forecasting: predicts ALL 7 pollutants simultaneously.
-Window sizes: 72-hour input (seq_len) → 48-hour output (pred_len).
-
-Exports:
-    AQIDataset        : PyTorch Dataset (per-station sliding window, multi-target)
-    build_dataloaders : full pipeline data_dir → (train_loader, val_loader, test_loader, ...)
-
-Usage (Person 3 in train.py):
-    import sys
-    sys.path.insert(0, '/content/drive/MyDrive/AQI_Project')
-    from dataset import build_dataloaders
-
-    DATA_DIR = '/content/drive/MyDrive/AQI_Project/data'
-    train_loader, val_loader, test_loader, scaler, feat_cols = build_dataloaders(DATA_DIR)
-    # x: (batch, 72, n_features)   y: (batch, 48, n_targets)
-    # scaler.inverse_transform(arr_2d)  → real-unit values for all pollutants
-"""
 
 import os
 import joblib
@@ -28,7 +9,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 
-# ── Column mapping from raw CSV headers to clean names ────────────────────────
+# ── Column mapping: raw CSV headers → clean internal names ───────────────────
+# These match exactly the headers found in the per-station CSV files
 COL_RENAME = {
     'From Date':           'date',
     'PM2.5 (ug/m3)':      'PM2.5',
@@ -43,14 +25,16 @@ COL_RENAME = {
     'Benzene (ug/m3)':    'Benzene',
     'Toluene (ug/m3)':    'Toluene',
 }
+# All other columns in the CSV (To Date, RH, WS, WD, SR, BP, VWS, AT, RF,
+# Eth-Benzene, MP-Xylene, O Xylene) are intentionally ignored.
 
 STATION_COL    = 'StationId'
 DATE_COL       = 'date'
 POLLUTANT_COLS = ['PM2.5', 'PM10', 'NO', 'NO2', 'NOx',
                   'NH3', 'SO2', 'CO', 'O3', 'Benzene', 'Toluene']
 
-STATION_MISSING_THRESHOLD = 0.40
-COL_MISSING_THRESHOLD     = 0.50
+STATION_MISSING_THRESHOLD = 0.40   # drop stations with >40% missing
+COL_MISSING_THRESHOLD     = 0.50   # drop pollutant columns with >50% missing
 TRAIN_FRAC = 0.70
 VAL_FRAC   = 0.15
 
@@ -59,13 +43,21 @@ VAL_FRAC   = 0.15
 
 def _load_and_clean(data_dir: str):
     """
-    Read all per-station CSVs, merge, clean, and return a DataFrame plus
-    the list of surviving pollutant column names (used as both input and output).
+    Read all per-station CSVs from data_dir.
+    Keeps only columns in COL_RENAME — all weather columns are dropped.
+    Returns a merged DataFrame and the list of surviving pollutant column names.
     """
     station_files = sorted([
         f for f in os.listdir(data_dir)
         if f.endswith('.csv') and f != 'stations_info.csv'
+                              and f != 'india_aqi.csv'   # ignore merged file if present
     ])
+
+    if not station_files:
+        raise FileNotFoundError(
+            f'No per-station CSV files found in {data_dir}. '
+            f'Expected files like AP002.csv, not a single merged CSV.'
+        )
 
     frames = []
     for fname in station_files:
@@ -74,38 +66,49 @@ def _load_and_clean(data_dir: str):
             os.path.join(data_dir, fname),
             parse_dates=['From Date'],
         )
+
+        # Keep ONLY columns that are in COL_RENAME — drops weather, xylene, etc.
         rename = {k: v for k, v in COL_RENAME.items() if k in sdf.columns}
+        if not rename:
+            print(f'  Warning: no matching columns in {fname}, skipping.')
+            continue
+
         sdf = sdf[list(rename.keys())].rename(columns=rename)
         sdf[STATION_COL] = station_id
         frames.append(sdf)
 
+    if not frames:
+        raise ValueError('No valid station files could be loaded.')
+
     df = pd.concat(frames, ignore_index=True)
     df = df.sort_values([STATION_COL, DATE_COL]).reset_index(drop=True)
 
-    # Remove stations with too much missing data
+    # ── Station-level quality filter ─────────────────────────────────────────
     present = [c for c in POLLUTANT_COLS if c in df.columns]
     station_missing = (
         df.groupby(STATION_COL)[present]
-        .apply(lambda g: g.isnull().mean().mean())
+          .apply(lambda g: g.isnull().mean().mean())
     )
     good = station_missing[station_missing <= STATION_MISSING_THRESHOLD].index
     df   = df[df[STATION_COL].isin(good)].copy()
+    print(f'  Stations retained: {len(good)} of {station_missing.shape[0]}')
 
-    # Drop sparse pollutant columns (>50% missing globally)
-    col_miss  = df[present].isnull().mean()
-    bad_cols  = col_miss[col_miss > COL_MISSING_THRESHOLD].index.tolist()
-    df        = df.drop(columns=bad_cols)
-    # All surviving columns are both model inputs AND outputs (multi-target)
-    all_cols  = [c for c in present if c not in bad_cols]
+    # ── Column-level quality filter ──────────────────────────────────────────
+    col_miss = df[present].isnull().mean()
+    bad_cols = col_miss[col_miss > COL_MISSING_THRESHOLD].index.tolist()
+    df       = df.drop(columns=bad_cols)
+    all_cols = [c for c in present if c not in bad_cols]
+    print(f'  Pollutant columns retained: {len(all_cols)} → {all_cols}')
 
-    # Per-station interpolation (never across station boundaries)
+    # ── Per-station interpolation ────────────────────────────────────────────
     df[all_cols] = (
         df.groupby(STATION_COL)[all_cols]
-        .transform(lambda g: g.interpolate(method='linear', limit_direction='both'))
+          .transform(lambda g: g.interpolate(method='linear',
+                                             limit_direction='both'))
     )
     df[all_cols] = (
         df.groupby(STATION_COL)[all_cols]
-        .transform(lambda g: g.ffill().bfill())
+          .transform(lambda g: g.ffill().bfill())
     )
 
     df = df.dropna(subset=all_cols).reset_index(drop=True)
@@ -117,13 +120,14 @@ def _split_by_time(df, train_frac, val_frac):
     train_cutoff = dates.quantile(train_frac)
     val_cutoff   = dates.quantile(train_frac + val_frac)
     train = df[df[DATE_COL] <= train_cutoff].copy()
-    val   = df[(df[DATE_COL] > train_cutoff) & (df[DATE_COL] <= val_cutoff)].copy()
+    val   = df[(df[DATE_COL] > train_cutoff)
+               & (df[DATE_COL] <= val_cutoff)].copy()
     test  = df[df[DATE_COL] > val_cutoff].copy()
     return train, val, test
 
 
 def _scale(train, val, test, all_cols):
-    """Single StandardScaler covering all pollutant columns (inputs = outputs)."""
+    """Single StandardScaler across all pollutant columns."""
     scaler = StandardScaler()
     train, val, test = train.copy(), val.copy(), test.copy()
     train[all_cols] = scaler.fit_transform(train[all_cols])
@@ -162,7 +166,8 @@ class AQIDataset(Dataset):
 
         if not self._indices:
             raise ValueError(
-                f'No valid windows (seq_len={seq_len}, pred_len={pred_len}).'
+                f'No valid windows found (seq_len={seq_len}, '
+                f'pred_len={pred_len}). Check station data lengths.'
             )
 
     def __len__(self):  return len(self._indices)
@@ -170,7 +175,8 @@ class AQIDataset(Dataset):
     def __getitem__(self, idx):
         station, i = self._indices[idx]
         x = self._feat[station][i : i + self.seq_len]
-        y = self._tgt[station][i + self.seq_len : i + self.seq_len + self.pred_len]
+        y = self._tgt[station][i + self.seq_len
+                                : i + self.seq_len + self.pred_len]
         return x, y
 
     @property
@@ -194,36 +200,46 @@ def build_dataloaders(
     scaler_save_dir: str = None,
 ):
     """
-    Full pipeline: folder of station CSVs → (train_loader, val_loader, test_loader).
-
-    Args:
-        data_dir        : path to the folder containing per-station CSV files
-        seq_len         : look-back window in hours  (default 72)
-        pred_len        : forecast horizon in hours  (default 48)
-        batch_size      : DataLoader batch size      (default 64)
-        num_workers     : DataLoader worker processes (default 2)
-        scaler_save_dir : if set, saves all_scaler.pkl here
+    Full pipeline: folder of per-station CSVs → train/val/test DataLoaders.
 
     Returns:
         train_loader, val_loader, test_loader, scaler, feat_cols
         Tensor shapes — x: (batch, seq_len, n_features)
                         y: (batch, pred_len, n_targets)
+        Both n_features and n_targets will equal the number of pollutant
+        columns that survive quality filtering (typically 7).
     """
+    print('Loading and cleaning data...')
     df, all_cols = _load_and_clean(data_dir)
+
     train_df, val_df, test_df = _split_by_time(df, TRAIN_FRAC, VAL_FRAC)
-    train_df, val_df, test_df, scaler = _scale(train_df, val_df, test_df, all_cols)
+    train_df, val_df, test_df, scaler = _scale(
+        train_df, val_df, test_df, all_cols
+    )
 
     if scaler_save_dir:
         os.makedirs(scaler_save_dir, exist_ok=True)
-        joblib.dump(scaler, os.path.join(scaler_save_dir, 'all_scaler.pkl'))
+        joblib.dump(scaler,
+                    os.path.join(scaler_save_dir, 'all_scaler.pkl'))
+        print(f'  Scaler saved → {scaler_save_dir}/all_scaler.pkl')
 
     ds_kw = dict(station_col=STATION_COL, feature_cols=all_cols,
                  target_cols=all_cols, seq_len=seq_len, pred_len=pred_len)
-    dl_kw = dict(batch_size=batch_size, num_workers=num_workers, pin_memory=True)
+    dl_kw = dict(batch_size=batch_size,
+                 num_workers=num_workers, pin_memory=True)
+
+    train_ds = AQIDataset(train_df, **ds_kw)
+    val_ds   = AQIDataset(val_df,   **ds_kw)
+    test_ds  = AQIDataset(test_df,  **ds_kw)
+
+    print(f'  Training windows   : {len(train_ds):,}')
+    print(f'  Validation windows : {len(val_ds):,}')
+    print(f'  Test windows       : {len(test_ds):,}')
+    print(f'  n_features = n_targets = {train_ds.n_features}')
 
     return (
-        DataLoader(AQIDataset(train_df, **ds_kw), shuffle=True,  **dl_kw),
-        DataLoader(AQIDataset(val_df,   **ds_kw), shuffle=False, **dl_kw),
-        DataLoader(AQIDataset(test_df,  **ds_kw), shuffle=False, **dl_kw),
+        DataLoader(train_ds, shuffle=True,  **dl_kw),
+        DataLoader(val_ds,   shuffle=False, **dl_kw),
+        DataLoader(test_ds,  shuffle=False, **dl_kw),
         scaler, all_cols,
     )
