@@ -149,9 +149,10 @@ class AQIDataset(Dataset):
     """
 
     def __init__(self, df, station_col, feature_cols, target_cols,
-                 seq_len=72, pred_len=48):
+                 seq_len=72, pred_len=48, stride=6):
         self.seq_len  = seq_len
         self.pred_len = pred_len
+        self.stride   = stride
         self._feat    = {}
         self._tgt     = {}
         self._indices = []
@@ -161,7 +162,7 @@ class AQIDataset(Dataset):
             self._feat[station] = torch.FloatTensor(grp[feature_cols].values)
             self._tgt[station]  = torch.FloatTensor(grp[target_cols].values)
             n = len(grp)
-            for i in range(n - seq_len - pred_len + 1):
+            for i in range(0, n - seq_len - pred_len + 1, stride):
                 self._indices.append((station, i))
 
         if not self._indices:
@@ -198,6 +199,7 @@ def build_dataloaders(
     batch_size: int      = 64,
     num_workers: int     = 2,
     scaler_save_dir: str = None,
+    stride=6
 ):
     """
     Full pipeline: folder of per-station CSVs → train/val/test DataLoaders.
@@ -224,7 +226,7 @@ def build_dataloaders(
         print(f'  Scaler saved → {scaler_save_dir}/all_scaler.pkl')
 
     ds_kw = dict(station_col=STATION_COL, feature_cols=all_cols,
-                 target_cols=all_cols, seq_len=seq_len, pred_len=pred_len)
+                 target_cols=all_cols, seq_len=seq_len, pred_len=pred_len, stride=stride)
     dl_kw = dict(batch_size=batch_size,
                  num_workers=num_workers, pin_memory=True)
 
