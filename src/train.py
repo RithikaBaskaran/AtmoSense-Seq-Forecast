@@ -44,6 +44,7 @@ def get_args():
 
     p.add_argument('--num_workers', type=int, default=2)
     p.add_argument('--seed',        type=int, default=42)
+    p.add_argument('--stride',      type=int, default=6)
 
     return p.parse_args()
 
@@ -168,6 +169,7 @@ def main():
         batch_size      = args.batch_size,
         num_workers     = args.num_workers,
         scaler_save_dir = args.checkpoint_dir,
+        stride          = args.stride,
     )
 
     sample_x, sample_y = next(iter(train_loader))
@@ -202,6 +204,12 @@ def main():
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=3)
 
+    WARMUP_EPOCHS = 5
+    BASE_LR = args.lr
+    START_LR = BASE_LR / 10
+    for pg in optimizer.param_groups:
+        pg['lr'] = START_LR
+
     best_val_loss = float('inf')
     no_improve    = 0
     train_losses, val_losses = [], []
@@ -223,7 +231,13 @@ def main():
             pred_len=args.pred_len, n_targets=n_targets,
         )
         val_loss = val_m['loss']
-        scheduler.step(val_loss)
+        if epoch <= WARMUP_EPOCHS:
+            warmup_lr = START_LR + (BASE_LR - START_LR) * (epoch / WARMUP_EPOCHS)
+            for pg in optimizer.param_groups:
+                pg['lr'] = warmup_lr
+            log(f'        LR warmup: {warmup_lr:.2e}', args.log_path)
+        else:
+            scheduler.step(val_loss)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
