@@ -1,392 +1,572 @@
-# Model Evaluation 
+"""
+Full Evaluation for AQITransformer and HybridBiLSTMTransformer.
+"""
+
+import os, sys, math, json, joblib, importlib
+import numpy as np
+import pandas as pd
 import torch
-print(torch.cuda.is_available())
+import matplotlib.pyplot as plt
 
 from google.colab import drive
-drive.mount('/content/drive')
-import pandas as pd
-df = pd.read_csv('/content/drive/MyDrive/AQI_Project/data/india_aqi.csv')
+drive.mount('/content/drive', force_remount=True)
 
-!pip install -q torch torchvision pandas numpy scikit-learn matplotlib seaborn kaggle
+REPO_DIR = '/content/AtmoSense-Seq-Forecast'
+SRC_DIR = os.path.join(REPO_DIR, 'src')
+sys.path.insert(0, SRC_DIR)
 
-import torch
-CHECKPOINT_PATH = '/content/drive/MyDrive/AQI_Project/checkpoints/best_model.pt'
-checkpoint = torch.load(CHECKPOINT_PATH, map_location='cpu')
-if isinstance(checkpoint, dict):
-    print(f"Checkpoint keys: {checkpoint.keys()}")
-else:
-    print(f"Checkpoint is a {type(checkpoint)} object, not a dictionary.")
+from dataset import build_dataloaders
 
-import sys
-import os
-import torch
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import shutil
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-
-sys.path.append('/content/AtmoSense-Seq-Forecast/src')
-from model import AQITransformer
-
-# Define paths
-CHECKPOINT_PATH = '/content/drive/MyDrive/AQI_Project/checkpoints/best_model.pt'
-DATA_PATH = '/content/drive/MyDrive/AQI_Project/data/india_aqi.csv'
+import model as model_module
+importlib.reload(model_module)
+from model import AQITransformer, HybridBiLSTMTransformer
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print('device:', device)
 
-params = {
-    'seq_len': 72,
-    'pred_len': 48,
-    'd_model': 32,
-    'nhead': 8,
-    'num_enc_layers': 1,
-    'num_dec_layers': 1,
-    'dim_feedforward': 64,
-    'dropout': 0.1,
-    'batch_size': 128
-}
+# Paths
+DATA_DIR = "/content/drive/MyDrive/AQI_Project/data"
+CHECKPOINT_DIR = "/content/drive/MyDrive/AQI_Project/checkpoints"
 
-# 1. Load and Prepare Data Directly
-print('Loading data from Drive...')
-df = pd.read_csv(DATA_PATH)
+AQI_CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "best_model.pt")
+AQI_SCALER_PATH = os.path.join(CHECKPOINT_DIR, "all_scaler.pkl")
 
-feat_cols = [
-    'PM2.5 (ug/m3)', 'PM10 (ug/m3)', 'NO (ug/m3)', 'NO2 (ug/m3)',
-    'NOx (ppb)', 'NH3 (ug/m3)', 'SO2 (ug/m3)', 'CO (mg/m3)',
-    'Ozone (ug/m3)', 'Benzene (ug/m3)', 'Toluene (ug/m3)'
-]
+HYBRID_CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "best_model_hybrid.pt")
+HYBRID_SCALER_PATH = os.path.join(CHECKPOINT_DIR, "all_scaler_hybrid.pkl")
 
-print(f"Selected features ({len(feat_cols)}):", feat_cols)
+LOCAL_RESULTS_DIR = os.path.join(REPO_DIR, "final_full_set_eval_results")
+DRIVE_RESULTS_DIR = "/content/drive/MyDrive/AQI_Project/Final Full Set Evaluation Results"
 
-# Clean and scale
-data = df[feat_cols].ffill().bfill().values
+os.makedirs(LOCAL_RESULTS_DIR, exist_ok=True)
+os.makedirs(DRIVE_RESULTS_DIR, exist_ok=True)
 
-scaler = StandardScaler()
-scaled_data = scaler.fit_transform(data)
-
-test_start = int(len(scaled_data) * 0.8)
-test_data = scaled_data[test_start:]
-
-def create_sequences(data, seq_len, pred_len):
-    xs, ys = [], []
-    for i in range(len(data) - seq_len - pred_len):
-        xs.append(data[i:(i + seq_len)])
-        ys.append(data[(i + seq_len):(i + seq_len + pred_len)])
-    return np.array(xs), np.array(ys)
-
-X_test, y_test = create_sequences(test_data, params['seq_len'], params['pred_len'])
-print(f'Test sequences created: {X_test.shape}')
-
-# 2. Load Model
-n_features = len(feat_cols)
-model = AQITransformer(
-    n_features=n_features, n_targets=n_features, seq_len=params['seq_len'], pred_len=params['pred_len'],
-    d_model=params['d_model'], nhead=params['nhead'], num_enc_layers=params['num_enc_layers'],
-    num_dec_layers=params['num_dec_layers'], dim_feedforward=params['dim_feedforward'], dropout=params['dropout']
-).to(device)
-
-print(f'Loading weights...')
-model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=device))
-model.eval()
-
-# 3. Inference Function
-@torch.no_grad()
-def greedy_decode(model, src, pred_len, device):
-    B = src.size(0)
-    dec_input = torch.zeros(B, 1, src.size(-1), device=device)
-    outputs = []
-    for _ in range(pred_len):
-        out = model(src, dec_input)
-        next_step = out[:, -1:, :]
-        outputs.append(next_step)
-        dec_input = torch.cat([dec_input, next_step], dim=1)
-    return torch.cat(outputs, dim=1)
-
-# 4. Run Inference on a subset
-LIMIT = 10
-print(f'Running inference on {LIMIT} samples...')
-src_subset = torch.tensor(X_test[:LIMIT], dtype=torch.float32).to(device)
-tgt_subset = y_test[:LIMIT]
-
-preds_scaled = greedy_decode(model, src_subset, params['pred_len'], device).cpu().numpy()
-
-# 5. Inverse Scaling & Metrics
-preds_inv = scaler.inverse_transform(preds_scaled.reshape(-1, n_features)).reshape(LIMIT, params['pred_len'], n_features)
-trues_inv = scaler.inverse_transform(tgt_subset.reshape(-1, n_features)).reshape(LIMIT, params['pred_len'], n_features)
-
-results = []
-plt.figure(figsize=(12, 18))
-for i, name in enumerate(feat_cols):
-    p, t = preds_inv[:, :, i], trues_inv[:, :, i]
-    mae = np.mean(np.abs(p - t))
-    rmse = np.sqrt(np.mean((p - t)**2))
-    results.append({'Pollutant': name, 'MAE': mae, 'RMSE': rmse})
-
-    plt.subplot(len(feat_cols), 1, i+1)
-    plt.plot(t[0, :], label='Actual', color='blue')
-    plt.plot(p[0, :], label='Predicted', linestyle='--', color='red')
-    plt.title(f'{name} (Sample 0 Forecast)')
-    plt.legend()
-
-display(pd.DataFrame(results))
-plt.tight_layout()
-plt.show()
-
-
-
-# Ensure results directory exists
-RESULTS_DIR = '/content/AtmoSense-Seq-Forecast/results'
-os.makedirs(RESULTS_DIR, exist_ok=True)
-
-# Configuration for full evaluation
+# Model/data constants
+SEQ_LEN = 72
+PRED_LEN = 48
 BATCH_SIZE = 64
-num_samples = len(X_test)
-all_preds = []
-all_trues = []
+DATASET_STRIDE = 6
 
-print(f'Starting full evaluation on {num_samples} sequences...')
+# Run mode
+# False = load saved arrays from Drive and regenerate tables/figures.
+# True  = rerun full inference and overwrite arrays/metrics with the same run names.
+RUN_FULL_AQI_EVAL = False
+RUN_FULL_HYBRID_EVAL = False
 
-model.eval()
-with torch.no_grad():
-    # Using a larger batch size for the source but still decoding one by one
-    for i in range(0, num_samples, BATCH_SIZE):
-        end_idx = min(i + BATCH_SIZE, num_samples)
-        src_batch = torch.tensor(X_test[i:end_idx], dtype=torch.float32).to(device)
-        tgt_batch = y_test[i:end_idx]
+AQI_RUN_NAME = "full_test"
+HYBRID_RUN_NAME = "hybrid_full_test"
 
-        # Greedy decode for the batch
-        preds_batch_scaled = greedy_decode(model, src_batch, params['pred_len'], device).cpu().numpy()
+print("Drive results folder:", DRIVE_RESULTS_DIR)
+print("Run AQI full eval:", RUN_FULL_AQI_EVAL)
+print("Run Hybrid full eval:", RUN_FULL_HYBRID_EVAL)
 
-        all_preds.append(preds_batch_scaled)
-        all_trues.append(tgt_batch)
+"""Build held-out test loader"""
 
-        if (i // BATCH_SIZE) % 10 == 0:
-            print(f'Processed {end_idx}/{num_samples} samples...')
+train_loader, val_loader, test_loader, loader_scaler, feat_cols = build_dataloaders(
+    DATA_DIR,
+    seq_len=SEQ_LEN,
+    pred_len=PRED_LEN,
+    stride=DATASET_STRIDE,
+    batch_size=BATCH_SIZE,
+    num_workers=0,
+    scaler_save_dir=None,
+)
 
-# Concatenate results
-all_preds = np.concatenate(all_preds, axis=0)
-all_trues = np.concatenate(all_trues, axis=0)
+n_features = len(feat_cols)
+n_targets = len(feat_cols)
 
-# Inverse scaling
-preds_inv = scaler.inverse_transform(all_preds.reshape(-1, n_features)).reshape(-1, params['pred_len'], n_features)
-trues_inv = scaler.inverse_transform(all_trues.reshape(-1, n_features)).reshape(-1, params['pred_len'], n_features)
-
-# Calculate Global Metrics
-final_results = []
-for i, name in enumerate(feat_cols):
-    p, t = preds_inv[:, :, i], trues_inv[:, :, i]
-    mae = np.mean(np.abs(p - t))
-    rmse = np.sqrt(np.mean((p - t)**2))
-    final_results.append({'Pollutant': name, 'MAE': mae, 'RMSE': rmse})
-
-    # Save visualization for each pollutant (using the first sample as a representative)
-    plt.figure(figsize=(10, 4))
-    plt.plot(t[0, :], label='Actual', color='blue')
-    plt.plot(p[0, :], label='Predicted', linestyle='--', color='red')
-    plt.title(f'Full Eval: {name} Forecast')
-    plt.legend()
-    plt.savefig(os.path.join(RESULTS_DIR, f'forecast_{name.split(" ")[0]}.png'))
-    plt.close()
-
-# Save Metrics to CSV
-metrics_df = pd.DataFrame(final_results)
-metrics_df.to_csv(os.path.join(RESULTS_DIR, 'metrics.csv'), index=False)
-
-print(f'Full evaluation complete. Results saved to {RESULTS_DIR}')
-display(metrics_df)
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import os
-
-# Define Persistence Baseline
-# The 'last' value of each input sequence in X_test is used as the prediction for all 48 steps in the forecast.
-# X_test shape: (num_samples, seq_len, n_features)
-# Last value shape: (num_samples, n_features)
-
-last_observed = X_test[:, -1, :]
-# Broadcast last_observed to match y_test shape (num_samples, pred_len, n_features)
-persistence_preds_scaled = np.repeat(last_observed[:, np.newaxis, :], params['pred_len'], axis=1)
-
-# Inverse Scale the Persistence Predictions
-persistence_preds_inv = scaler.inverse_transform(persistence_preds_scaled.reshape(-1, n_features)).reshape(-1, params['pred_len'], n_features)
-# trues_inv is already available from previous cells
-
-# Calculate Persistence Metrics
-baseline_results = []
-for i, name in enumerate(feat_cols):
-    p, t = persistence_preds_inv[:, :, i], trues_inv[:, :, i]
-    mae = np.mean(np.abs(p - t))
-    rmse = np.sqrt(np.mean((p - t)**2))
-    baseline_results.append({'Pollutant': name, 'Baseline_MAE': mae, 'Baseline_RMSE': rmse})
-
-baseline_df = pd.DataFrame(baseline_results)
-
-# Compare with Transformer Model Metrics
-comparison_df = pd.merge(metrics_df, baseline_df, on='Pollutant')
-comparison_df['MAE_Improvement_%'] = ((comparison_df['Baseline_MAE'] - comparison_df['MAE']) / comparison_df['Baseline_MAE']) * 100
-
-print("Comparison: Transformer Model vs. Persistence Baseline")
-display(comparison_df)
-
-# Save comparison
-comparison_df.to_csv(os.path.join(RESULTS_DIR, 'baseline_comparison.csv'), index=False)
-
-# Visualize Comparison
-plt.figure(figsize=(14, 8))
-
-x = np.arange(len(feat_cols))
-width = 0.35
-
-plt.bar(x - width/2, comparison_df['Baseline_MAE'], width, label='Persistence (Baseline)', color='gray', alpha=0.7)
-plt.bar(x + width/2, comparison_df['MAE'], width, label='AQITransformer', color='skyblue')
-
-plt.xlabel('Pollutant')
-plt.ylabel('Mean Absolute Error (MAE)')
-plt.title('MAE Comparison: Transformer vs. Persistence Baseline')
-plt.xticks(x, [n.split(' ')[0] for n in feat_cols], rotation=45)
-plt.legend()
-plt.grid(axis='y', linestyle='--', alpha=0.6)
-plt.tight_layout()
-plt.show()
+print("Pollutants:", feat_cols)
+print("n_features:", n_features)
+print("n_targets:", n_targets)
+print("test batches:", len(test_loader))
+print("test samples:", len(test_loader.dataset))
+print("dataset stride:", DATASET_STRIDE)
 
 
+def greedy_decode(model, src, pred_len, n_targets, device):
+    model.eval()
+    batch_size = src.size(0)
+    decoder_input = torch.zeros(batch_size, 1, n_targets, device=device)
 
-plt.figure(figsize=(10, 8))
-corr = df[feat_cols].corr()
-sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
-plt.title('Correlation Matrix of Pollutants')
-heatmap_path = os.path.join(RESULTS_DIR, 'analysis_correlation_heatmap.png')
-plt.savefig(heatmap_path)
-plt.close()
+    preds = []
+    with torch.no_grad():
+        for _ in range(pred_len):
+            out = model(src, decoder_input)
+            next_step = out[:, -1:, :]
+            preds.append(next_step)
+            decoder_input = torch.cat([decoder_input, next_step], dim=1)
 
-pollutant_idx = 0
-residuals = (all_preds[:, :, pollutant_idx] - all_trues[:, :, pollutant_idx]).flatten()
-plt.figure(figsize=(10, 5))
-sns.histplot(residuals, kde=True, color='purple')
-plt.axvline(0, color='red', linestyle='--')
-plt.title(f'Prediction Errors (Residuals) - {feat_cols[pollutant_idx]}')
-residual_path = os.path.join(RESULTS_DIR, 'analysis_residuals_pm25.png')
-plt.savefig(residual_path)
-plt.close()
+    return torch.cat(preds, dim=1)
 
 
-mae_per_step = np.mean(np.abs(all_preds - all_trues), axis=(0, 2))
-plt.figure(figsize=(10, 5))
-plt.plot(range(1, params['pred_len'] + 1), mae_per_step, marker='o', color='green')
-plt.title('MAE vs. Forecast Horizon')
-plt.xlabel('Hours into Future')
-plt.ylabel('Global MAE')
-horizon_path = os.path.join(RESULTS_DIR, 'analysis_mae_horizon.png')
-plt.savefig(horizon_path)
-plt.close()
+def inverse_scale_3d(arr, scaler, n_features):
+    original_shape = arr.shape
+    return scaler.inverse_transform(arr.reshape(-1, n_features)).reshape(original_shape)
 
-# Sync files to Drive
-drive_path = '/content/drive/MyDrive/AQI_Project/final_results'
-for f in ['analysis_correlation_heatmap.png', 'analysis_residuals_pm25.png', 'analysis_mae_horizon.png']:
-    shutil.copy2(os.path.join(RESULTS_DIR, f), os.path.join(drive_path, f))
 
-print(f'Advanced visualizations saved and copied to {drive_path}')
+def mae(y_true, y_pred):
+    return np.mean(np.abs(y_true - y_pred))
 
-def calculate_mape(y_true, y_pred):
-    # Avoid division by zero by adding a small epsilon
-    mask = y_true != 0
+
+def rmse(y_true, y_pred):
+    return np.sqrt(np.mean((y_true - y_pred) ** 2))
+
+
+def mape(y_true, y_pred, eps=1e-6):
+    mask = np.abs(y_true) > eps
+    if np.sum(mask) == 0:
+        return np.nan
     return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
-final_comprehensive_results = []
 
-for i, name in enumerate(feat_cols):
-    # Model predictions
-    p_model = preds_inv[:, :, i]
-    # Baseline (Persistence) predictions
-    p_base = persistence_preds_inv[:, :, i]
-    # Actual values
-    t = trues_inv[:, :, i]
+def r2_score_np(y_true, y_pred):
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    return 1 - (ss_res / ss_tot) if ss_tot != 0 else np.nan
 
-    # Model Metrics
-    m_mae = np.mean(np.abs(p_model - t))
-    m_rmse = np.sqrt(np.mean((p_model - t)**2))
-    m_mape = calculate_mape(t, p_model)
-
-    # Baseline Metrics
-    b_mae = np.mean(np.abs(p_base - t))
-    b_rmse = np.sqrt(np.mean((p_base - t)**2))
-    b_mape = calculate_mape(t, p_base)
-
-    final_comprehensive_results.append({
-        'Pollutant': name,
-        'Model_MAE': m_mae,
-        'Model_RMSE': m_rmse,
-        'Model_MAPE_%': m_mape,
-        'Baseline_MAE': b_mae,
-        'Baseline_RMSE': b_rmse,
-        'Baseline_MAPE_%': b_mape
-    })
-
-comprehensive_df = pd.DataFrame(final_comprehensive_results)
-
-comprehensive_df.to_csv(os.path.join(RESULTS_DIR, 'metrics_comprehensive.csv'), index=False)
-comprehensive_df.to_csv('/content/drive/MyDrive/AQI_Project/final_results/metrics_comprehensive.csv', index=False)
-
-print('Comprehensive metrics including MAPE and Baseline comparison generated.')
-display(comprehensive_df)
-
-import seaborn as sns
-
-plt.figure(figsize=(10, 8))
-corr = df[feat_cols].corr()
-sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
-plt.title('Correlation Matrix of Pollutants')
-plt.show()
+def save_arrays(run_name, preds_scaled, trues_scaled, baseline_scaled, preds, trues, baseline):
+    for folder in [LOCAL_RESULTS_DIR, DRIVE_RESULTS_DIR]:
+        os.makedirs(folder, exist_ok=True)
+        np.save(os.path.join(folder, f"preds_scaled_{run_name}.npy"), preds_scaled)
+        np.save(os.path.join(folder, f"trues_scaled_{run_name}.npy"), trues_scaled)
+        np.save(os.path.join(folder, f"baseline_scaled_{run_name}.npy"), baseline_scaled)
+        np.save(os.path.join(folder, f"preds_{run_name}.npy"), preds)
+        np.save(os.path.join(folder, f"trues_{run_name}.npy"), trues)
+        np.save(os.path.join(folder, f"baseline_{run_name}.npy"), baseline)
 
 
-# Calculating error for all samples for PM2.5 as a representative
-pollutant_idx = 0 # PM2.5
-residuals = (all_preds[:, :, pollutant_idx] - all_trues[:, :, pollutant_idx]).flatten()
+def load_arrays(run_name, results_dir):
+    preds = np.load(os.path.join(results_dir, f"preds_{run_name}.npy"))
+    trues = np.load(os.path.join(results_dir, f"trues_{run_name}.npy"))
+    baseline = np.load(os.path.join(results_dir, f"baseline_{run_name}.npy"))
+    return preds, trues, baseline
 
-plt.figure(figsize=(10, 5))
-sns.histplot(residuals, kde=True, color='purple')
-plt.axvline(0, color='red', linestyle='--')
-plt.title(f'Distribution of Prediction Errors (Residuals) - {feat_cols[pollutant_idx]}')
-plt.xlabel('Error (Predicted - Actual)')
-plt.ylabel('Frequency')
-plt.show()
 
-mae_per_step = np.mean(np.abs(all_preds - all_trues), axis=(0, 2))
+def find_cached_dir(run_name, preferred_dir, fallback_dirs=None):
+    fallback_dirs = fallback_dirs or []
+    candidates = [preferred_dir] + fallback_dirs
+    for folder in candidates:
+        if os.path.exists(os.path.join(folder, f"preds_{run_name}.npy")):
+            return folder
+    raise FileNotFoundError(
+        f"Could not find cached arrays for run_name='{run_name}'. "
+        f"Set the matching RUN_FULL_*_EVAL flag to True to regenerate them."
+    )
 
-plt.figure(figsize=(10, 5))
-plt.plot(range(1, params['pred_len'] + 1), mae_per_step, marker='o', color='green')
-plt.title('Mean Absolute Error vs. Forecast Horizon')
-plt.xlabel('Hours into Future')
-plt.ylabel('Global MAE')
-plt.grid(True, alpha=0.3)
-plt.show()
+"""Model loading"""
 
-print('Visualizations generated. These help identify if the model error accumulates over time.')
+AQI_SCALER = joblib.load(AQI_SCALER_PATH)
+HYBRID_SCALER = joblib.load(HYBRID_SCALER_PATH)
 
-import os
+print("AQI scaler features:", AQI_SCALER.n_features_in_)
+print("Hybrid scaler features:", HYBRID_SCALER.n_features_in_)
+print("n_features:", n_features)
 
-results_path = '/content/AtmoSense-Seq-Forecast/results'
-if os.path.exists(results_path):
-    print(f'Files found in {results_path}:')
-    display(os.listdir(results_path))
+assert AQI_SCALER.n_features_in_ == n_features, "AQI scaler feature mismatch"
+assert HYBRID_SCALER.n_features_in_ == n_features, "Hybrid scaler feature mismatch"
+
+AQI_MODEL_CONFIG = dict(
+    n_features=n_features,
+    n_targets=n_targets,
+    seq_len=SEQ_LEN,
+    pred_len=PRED_LEN,
+    d_model=128,
+    nhead=8,
+    num_enc_layers=4,
+    num_dec_layers=4,
+    dim_feedforward=512,
+    dropout=0.1,
+)
+
+HYBRID_MODEL_CONFIG = dict(
+    n_features=n_features,
+    n_targets=n_targets,
+    seq_len=SEQ_LEN,
+    pred_len=PRED_LEN,
+    d_model=128,
+    nhead=8,
+    num_dec_layers=4,
+    dim_feedforward=512,
+    dropout=0.1,
+    lstm_layers=2,
+)
+
+
+def load_state_dict_from_checkpoint(checkpoint_path):
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    state = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
+    print("Checkpoint:", checkpoint_path)
+    print("Number of keys:", len(state.keys()))
+    print("First keys:", list(state.keys())[:10])
+    print("Has BiLSTM keys:", any("bilstm" in k for k in state.keys()))
+    print("Has Transformer encoder keys:", any("encoder.layers" in k for k in state.keys()))
+    return state
+
+
+def load_aqi_model(checkpoint_path):
+    print("=" * 70)
+    print("Loading AQITransformer")
+    model_obj = AQITransformer(**AQI_MODEL_CONFIG).to(device)
+    state = load_state_dict_from_checkpoint(checkpoint_path)
+    model_obj.load_state_dict(state)
+    model_obj.eval()
+    return model_obj
+
+
+def load_hybrid_model(checkpoint_path):
+    print("=" * 70)
+    print("Loading HybridBiLSTMTransformer")
+    model_obj = HybridBiLSTMTransformer(**HYBRID_MODEL_CONFIG).to(device)
+    state = load_state_dict_from_checkpoint(checkpoint_path)
+    model_obj.load_state_dict(state)
+    model_obj.eval()
+    return model_obj
+
+"""
+Full-test evaluation function
+
+If full evaluation is enabled, rerunning full evaluation will overwrite the matching cached arrays and metric files in Drive.
+"""
+
+def run_full_test_evaluation(model_obj, scaler_obj, run_name):
+    all_preds_scaled = []
+    all_trues_scaled = []
+    all_baseline_scaled = []
+
+    used = 0
+    model_obj.eval()
+
+    with torch.no_grad():
+        for batch_idx, (x, y) in enumerate(test_loader):
+            x = x.to(device)
+            y = y.to(device)
+
+            preds_batch = greedy_decode(model_obj, x, PRED_LEN, n_targets, device)
+            baseline_batch = x[:, -1:, :].repeat(1, PRED_LEN, 1)
+
+            all_preds_scaled.append(preds_batch.cpu().numpy())
+            all_trues_scaled.append(y.cpu().numpy())
+            all_baseline_scaled.append(baseline_batch.cpu().numpy())
+
+            used += 1
+            if used % 50 == 0:
+                print(f"{run_name}: Finished {used}/{len(test_loader)} batches")
+
+    preds_scaled = np.concatenate(all_preds_scaled, axis=0)
+    trues_scaled = np.concatenate(all_trues_scaled, axis=0)
+    baseline_scaled = np.concatenate(all_baseline_scaled, axis=0)
+
+    preds = inverse_scale_3d(preds_scaled, scaler_obj, n_features)
+    trues = inverse_scale_3d(trues_scaled, scaler_obj, n_features)
+    baseline = inverse_scale_3d(baseline_scaled, scaler_obj, n_features)
+
+    save_arrays(run_name, preds_scaled, trues_scaled, baseline_scaled, preds, trues, baseline)
+
+    print("=" * 70)
+    print("Run:", run_name)
+    print("Evaluated batches:", used)
+    print("Evaluated samples:", preds.shape[0])
+    print("preds:", preds.shape)
+    print("trues:", trues.shape)
+    print("baseline:", baseline.shape)
+    print("Saved arrays to:", DRIVE_RESULTS_DIR)
+
+    return preds, trues, baseline, used
+
+"""Metrics functions"""
+
+def make_metrics_table(run_name, model_label, preds_arr, trues_arr, baseline_arr, evaluated_batches):
+    rows = []
+
+    for i, pollutant in enumerate(feat_cols):
+        y_true = trues_arr[:, :, i]
+        y_model = preds_arr[:, :, i]
+        y_base = baseline_arr[:, :, i]
+
+        model_mae = mae(y_true, y_model)
+        base_mae = mae(y_true, y_base)
+        model_rmse = rmse(y_true, y_model)
+        base_rmse = rmse(y_true, y_base)
+
+        rows.append({
+            "model": model_label,
+            "pollutant": pollutant,
+            "model_mae": model_mae,
+            "model_rmse": model_rmse,
+            "model_mape": mape(y_true, y_model),
+            "model_r2": r2_score_np(y_true, y_model),
+            "baseline_mae": base_mae,
+            "baseline_rmse": base_rmse,
+            "baseline_mape": mape(y_true, y_base),
+            "baseline_r2": r2_score_np(y_true, y_base),
+            "mae_improvement_percent": ((base_mae - model_mae) / base_mae) * 100 if base_mae != 0 else np.nan,
+            "rmse_improvement_percent": ((base_rmse - model_rmse) / base_rmse) * 100 if base_rmse != 0 else np.nan,
+            "evaluated_batches": evaluated_batches,
+            "evaluated_samples": preds_arr.shape[0],
+            "run_name": run_name,
+        })
+
+    metrics_df = pd.DataFrame(rows)
+
+    for folder in [LOCAL_RESULTS_DIR, DRIVE_RESULTS_DIR]:
+        os.makedirs(folder, exist_ok=True)
+        metrics_df.to_csv(os.path.join(folder, f"metrics_{run_name}.csv"), index=False)
+
+    return metrics_df
+
+
+def overall_metrics(run_name, model_label, preds_arr, trues_arr, baseline_arr, evaluated_batches):
+    model_mae = mae(trues_arr, preds_arr)
+    base_mae = mae(trues_arr, baseline_arr)
+    model_rmse = rmse(trues_arr, preds_arr)
+    base_rmse = rmse(trues_arr, baseline_arr)
+
+    return {
+        "model": model_label,
+        "run_name": run_name,
+        "model_mae": model_mae,
+        "baseline_mae": base_mae,
+        "mae_improvement_percent": ((base_mae - model_mae) / base_mae) * 100 if base_mae != 0 else np.nan,
+        "model_rmse": model_rmse,
+        "baseline_rmse": base_rmse,
+        "rmse_improvement_percent": ((base_rmse - model_rmse) / base_rmse) * 100 if base_rmse != 0 else np.nan,
+        "model_r2": r2_score_np(trues_arr, preds_arr),
+        "baseline_r2": r2_score_np(trues_arr, baseline_arr),
+        "evaluated_batches": evaluated_batches,
+        "evaluated_samples": preds_arr.shape[0],
+    }
+
+"""Evaluate or load AQITransformer results"""
+
+if RUN_FULL_AQI_EVAL:
+    AQI_MODEL = load_aqi_model(AQI_CHECKPOINT_PATH)
+    aqi_preds, aqi_trues, aqi_baseline, aqi_batches = run_full_test_evaluation(
+        AQI_MODEL,
+        AQI_SCALER,
+        AQI_RUN_NAME,
+    )
 else:
-    print('Results directory not found!')
+    AQI_RESULTS_DIR = find_cached_dir(
+        AQI_RUN_NAME,
+        DRIVE_RESULTS_DIR,
+        fallback_dirs=["/content/drive/MyDrive/AQI_Project/results3"],
+    )
+    aqi_preds, aqi_trues, aqi_baseline = load_arrays(AQI_RUN_NAME, AQI_RESULTS_DIR)
+    aqi_batches = len(test_loader)
+    print("Loaded AQI arrays from:", AQI_RESULTS_DIR)
 
-import shutil
+metrics_aqi_full = make_metrics_table(
+    AQI_RUN_NAME,
+    "AQITransformer",
+    aqi_preds,
+    aqi_trues,
+    aqi_baseline,
+    aqi_batches,
+)
 
-drive_results_path = '/content/drive/MyDrive/AQI_Project/final_results'
+overall_aqi = overall_metrics(
+    AQI_RUN_NAME,
+    "AQITransformer",
+    aqi_preds,
+    aqi_trues,
+    aqi_baseline,
+    aqi_batches,
+)
 
-os.makedirs(drive_results_path, exist_ok=True)
+print("AQI preds:", aqi_preds.shape)
+display(metrics_aqi_full)
+display(pd.DataFrame([overall_aqi]))
 
-local_results_path = '/content/AtmoSense-Seq-Forecast/results'
-for item in os.listdir(local_results_path):
-    s = os.path.join(local_results_path, item)
-    d = os.path.join(drive_results_path, item)
-    if os.path.isfile(s):
-        shutil.copy2(s, d)
+"""Evaluate or load HybridBiLSTMTransformer results"""
 
-print(f'Successfully copied all results to: {drive_results_path}')
+if RUN_FULL_HYBRID_EVAL:
+    HYBRID_MODEL = load_hybrid_model(HYBRID_CHECKPOINT_PATH)
+    hybrid_preds, hybrid_trues, hybrid_baseline, hybrid_batches = run_full_test_evaluation(
+        HYBRID_MODEL,
+        HYBRID_SCALER,
+        HYBRID_RUN_NAME,
+    )
+else:
+    HYBRID_RESULTS_DIR = find_cached_dir(HYBRID_RUN_NAME, DRIVE_RESULTS_DIR)
+    hybrid_preds, hybrid_trues, hybrid_baseline = load_arrays(HYBRID_RUN_NAME, HYBRID_RESULTS_DIR)
+    hybrid_batches = len(test_loader)
+    print("Loaded Hybrid arrays from:", HYBRID_RESULTS_DIR)
+
+metrics_hybrid_full = make_metrics_table(
+    HYBRID_RUN_NAME,
+    "HybridBiLSTMTransformer",
+    hybrid_preds,
+    hybrid_trues,
+    hybrid_baseline,
+    hybrid_batches,
+)
+
+overall_hybrid = overall_metrics(
+    HYBRID_RUN_NAME,
+    "HybridBiLSTMTransformer",
+    hybrid_preds,
+    hybrid_trues,
+    hybrid_baseline,
+    hybrid_batches,
+)
+
+print("Hybrid preds:", hybrid_preds.shape)
+display(metrics_hybrid_full)
+display(pd.DataFrame([overall_hybrid]))
+
+"""Compare AQITransformer and HybridBiLSTMTransformer"""
+
+overall_compare = pd.DataFrame([overall_aqi, overall_hybrid])
+display(overall_compare)
+
+for folder in [LOCAL_RESULTS_DIR, DRIVE_RESULTS_DIR]:
+    overall_compare.to_csv(os.path.join(folder, "overall_aqi_vs_hybrid_comparison.csv"), index=False)
+
+per_pollutant_compare = metrics_aqi_full.merge(
+    metrics_hybrid_full,
+    on="pollutant",
+    suffixes=("_aqi", "_hybrid"),
+)
+
+per_pollutant_compare["hybrid_vs_aqi_rmse_improvement_percent"] = (
+    (per_pollutant_compare["model_rmse_aqi"] - per_pollutant_compare["model_rmse_hybrid"])
+    / per_pollutant_compare["model_rmse_aqi"]
+) * 100
+
+per_pollutant_compare["hybrid_vs_aqi_mae_improvement_percent"] = (
+    (per_pollutant_compare["model_mae_aqi"] - per_pollutant_compare["model_mae_hybrid"])
+    / per_pollutant_compare["model_mae_aqi"]
+) * 100
+
+cols_to_show = [
+    "pollutant",
+    "model_rmse_aqi",
+    "model_rmse_hybrid",
+    "hybrid_vs_aqi_rmse_improvement_percent",
+    "model_mae_aqi",
+    "model_mae_hybrid",
+    "hybrid_vs_aqi_mae_improvement_percent",
+]
+
+display(per_pollutant_compare[cols_to_show])
+
+for folder in [LOCAL_RESULTS_DIR, DRIVE_RESULTS_DIR]:
+    per_pollutant_compare.to_csv(os.path.join(folder, "per_pollutant_aqi_vs_hybrid_comparison.csv"), index=False)
+
+"""Visualization"""
+
+def save_current_plot(filename):
+    for folder in [LOCAL_RESULTS_DIR, DRIVE_RESULTS_DIR]:
+        path = os.path.join(folder, filename)
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+        print("Saved:", path)
+
+# 1. Overall RMSE comparison against baseline
+plot_df = overall_compare.copy()
+x = np.arange(len(plot_df))
+width = 0.35
+
+plt.figure(figsize=(8, 5))
+plt.bar(x - width/2, plot_df["baseline_rmse"], width, label="Persistence Baseline")
+plt.bar(x + width/2, plot_df["model_rmse"], width, label="Model")
+plt.xticks(x, plot_df["model"], rotation=15, ha="right")
+plt.ylabel("RMSE")
+plt.title("Overall RMSE vs Persistence Baseline")
+plt.legend()
+plt.tight_layout()
+save_current_plot("overall_rmse_model_vs_baseline.png")
+plt.show()
+
+# 2. Compact overall RMSE improvement over persistence baseline
+plot_df = overall_compare.copy()
+plt.figure(figsize=(6, 2.8))
+bars = plt.barh(plot_df["model"], plot_df["rmse_improvement_percent"])
+plt.xlabel("RMSE Improvement over Persistence (%)")
+plt.title("Overall RMSE Improvement")
+for bar in bars:
+    width = bar.get_width()
+    plt.text(width + 0.15, bar.get_y() + bar.get_height() / 2, f"{width:.2f}%", va="center")
+plt.xlim(0, plot_df["rmse_improvement_percent"].max() + 3)
+plt.tight_layout()
+save_current_plot("overall_rmse_improvement_percent.png")
+plt.show()
+
+# 3. Per-pollutant RMSE comparison
+plot_df = per_pollutant_compare.copy()
+x = np.arange(len(plot_df))
+width = 0.35
+
+plt.figure(figsize=(12, 5))
+plt.bar(x - width/2, plot_df["model_rmse_aqi"], width, label="AQITransformer")
+plt.bar(x + width/2, plot_df["model_rmse_hybrid"], width, label="HybridBiLSTMTransformer")
+plt.xticks(x, plot_df["pollutant"], rotation=45, ha="right")
+plt.ylabel("RMSE")
+plt.title("Per-Pollutant RMSE")
+plt.legend()
+plt.tight_layout()
+save_current_plot("per_pollutant_rmse_aqi_vs_hybrid.png")
+plt.show()
+
+# 4. Hybrid improvement over AQI by pollutant
+plot_df = per_pollutant_compare.sort_values("hybrid_vs_aqi_rmse_improvement_percent", ascending=False)
+
+plt.figure(figsize=(12, 5))
+plt.bar(plot_df["pollutant"], plot_df["hybrid_vs_aqi_rmse_improvement_percent"])
+plt.axhline(0, linestyle="--", linewidth=1)
+plt.xticks(rotation=45, ha="right")
+plt.ylabel("Hybrid RMSE Improvement over AQI (%)")
+plt.title("Hybrid vs AQITransformer: RMSE Improvement by Pollutant")
+plt.tight_layout()
+save_current_plot("hybrid_vs_aqi_rmse_improvement_by_pollutant.png")
+plt.show()
+
+# 5. RMSE across forecast horizon
+horizon_rmse_aqi = np.sqrt(np.mean((aqi_trues - aqi_preds) ** 2, axis=(0, 2)))
+horizon_rmse_hybrid = np.sqrt(np.mean((hybrid_trues - hybrid_preds) ** 2, axis=(0, 2)))
+horizon_rmse_baseline = np.sqrt(np.mean((aqi_trues - aqi_baseline) ** 2, axis=(0, 2)))
+
+plt.figure(figsize=(10, 5))
+plt.plot(np.arange(1, PRED_LEN + 1), horizon_rmse_baseline, marker="o", label="Persistence Baseline")
+plt.plot(np.arange(1, PRED_LEN + 1), horizon_rmse_aqi, marker="o", label="AQITransformer")
+plt.plot(np.arange(1, PRED_LEN + 1), horizon_rmse_hybrid, marker="o", label="HybridBiLSTMTransformer")
+plt.xlabel("Forecast Hour")
+plt.ylabel("RMSE")
+plt.title("RMSE Across 48-Hour Forecast Horizon")
+plt.legend()
+plt.tight_layout()
+save_current_plot("rmse_by_forecast_horizon_aqi_vs_hybrid.png")
+plt.show()
+
+# 6. MAE across forecast horizon
+horizon_mae_aqi = np.mean(np.abs(aqi_trues - aqi_preds), axis=(0, 2))
+horizon_mae_hybrid = np.mean(np.abs(hybrid_trues - hybrid_preds), axis=(0, 2))
+horizon_mae_baseline = np.mean(np.abs(aqi_trues - aqi_baseline), axis=(0, 2))
+
+plt.figure(figsize=(10, 5))
+plt.plot(np.arange(1, PRED_LEN + 1), horizon_mae_baseline, marker="o", label="Persistence Baseline")
+plt.plot(np.arange(1, PRED_LEN + 1), horizon_mae_aqi, marker="o", label="AQITransformer")
+plt.plot(np.arange(1, PRED_LEN + 1), horizon_mae_hybrid, marker="o", label="HybridBiLSTMTransformer")
+plt.xlabel("Forecast Hour")
+plt.ylabel("MAE")
+plt.title("MAE Across 48-Hour Forecast Horizon")
+plt.legend()
+plt.tight_layout()
+save_current_plot("mae_by_forecast_horizon_aqi_vs_hybrid.png")
+plt.show()
+
+"""Summary"""
+
+print("=" * 70)
+print("TEST SUMMARY")
+print("Test batches:", len(test_loader))
+print("Test samples:", len(test_loader.dataset))
+print("Pollutants:", feat_cols)
+print()
+
+print("Overall comparison:")
+display(overall_compare)
+
+best_model = overall_compare.sort_values("model_rmse").iloc[0]
+print("Best model by overall RMSE:", best_model["model"])
+print("Best overall RMSE:", best_model["model_rmse"])
+print("RMSE improvement over persistence:", best_model["rmse_improvement_percent"], "%")
+print("Saved all results to:", DRIVE_RESULTS_DIR)
