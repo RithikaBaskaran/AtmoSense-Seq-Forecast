@@ -110,3 +110,94 @@ class AQITransformer(nn.Module):
         tgt_mask = self._causal_mask(tgt.size(1), tgt.device)
         dec_out  = self.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
         return self.output_proj(dec_out)
+
+class HybridBiLSTMTransformer(nn.Module):
+    """
+    Hybrid encoder-decoder model for multi-pollutant AQI forecasting.
+
+    The encoder is a 2-layer Bidirectional LSTM which naturally emphasises
+    recent time steps through its gating mechanism.  The decoder is the same
+    4-layer masked self-attention + cross-attention Transformer decoder used
+    in AQITransformer.  The BiLSTM output shape (batch, 72, 128) is identical
+    to the AQITransformer encoder memory shape, so the decoder is completely
+    unchanged.
+
+    Motivation: the BiLSTM encoder gives the decoder a stable, recency-biased
+    memory from the very first training epoch, reducing the noisy validation
+    loss oscillation observed with the pure Transformer encoder.
+
+    Input  -> (batch, seq_len=72,  n_features=11)
+    Output -> (batch, pred_len=48, n_targets=11)
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        n_targets: int,
+        seq_len: int         = 72,
+        pred_len: int        = 48,
+        d_model: int         = 128,
+        nhead: int           = 8,
+        num_dec_layers: int  = 4,
+        dim_feedforward: int = 512,
+        dropout: float       = 0.1,
+        lstm_layers: int     = 2,
+    ):
+        super().__init__()
+        self.seq_len  = seq_len
+        self.pred_len = pred_len
+        self.d_model  = d_model
+
+        # BiLSTM encoder
+        # hidden_size = d_model // 2 because bidirectional doubles the output
+        # Output shape: (batch, seq_len, d_model) = (batch, 72, 128)
+        self.bilstm = nn.LSTM(
+            input_size   = n_features,
+            hidden_size  = d_model // 2,   # 64, bidirectional → 128
+            num_layers   = lstm_layers,
+            batch_first  = True,
+            bidirectional= True,
+            dropout      = dropout if lstm_layers > 1 else 0.0,
+        )
+
+        # Decoder input projection and positional encoding
+        # (identical to AQITransformer decoder side)
+        self.dec_input_proj = nn.Linear(n_targets, d_model)
+        self.pos_enc = PositionalEncoding(d_model,
+                                          max_len=1000,
+                                          dropout=dropout)
+
+        # Transformer decoder — unchanged from AQITransformer
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model         = d_model,
+            nhead           = nhead,
+            dim_feedforward = dim_feedforward,
+            dropout         = dropout,
+            batch_first     = True,
+        )
+        self.decoder = nn.TransformerDecoder(decoder_layer,
+                                              num_layers=num_dec_layers)
+
+        # Output projection
+        self.output_proj = nn.Linear(d_model, n_targets)
+
+    def _causal_mask(self, size: int,
+                     device: torch.device) -> torch.Tensor:
+        return torch.triu(
+            torch.ones(size, size, device=device), diagonal=1
+        ).bool()
+
+    def forward(self, src: torch.Tensor,
+                tgt: torch.Tensor) -> torch.Tensor:
+        # src: (batch, 72, n_features)
+        # tgt: (batch, t,  n_targets)   where t grows during autoregressive decode
+
+        # BiLSTM encodes the full 72-hour input sequence
+        # memory: (batch, 72, d_model)
+        memory, _ = self.bilstm(src)
+
+        # Decoder side — identical to AQITransformer.forward
+        tgt_emb  = self.pos_enc(self.dec_input_proj(tgt))
+        tgt_mask = self._causal_mask(tgt.size(1), tgt.device)
+        dec_out  = self.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+        return self.output_proj(dec_out)
