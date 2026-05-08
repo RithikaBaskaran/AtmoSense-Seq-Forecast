@@ -1,0 +1,3 @@
+model,model_r2,baseline_r2
+AQITransformer,0.76386636,0.60466325
+HybridBiLSTMTransformer,0.7669863,0.60466325

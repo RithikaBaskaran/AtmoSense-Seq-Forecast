@@ -1,0 +1,3 @@
+model,run_name,model_mae,baseline_mae,mae_improvement_percent,model_rmse,baseline_rmse,rmse_improvement_percent,model_r2,baseline_r2,evaluated_batches,evaluated_samples
+AQITransformer,full_test,12.802133,16.050653,20.239182,33.411297,43.23127,22.714977,0.76386636,0.60466325,2332,149225
+HybridBiLSTMTransformer,hybrid_full_test,12.955154,16.050653,19.285812,33.18984,43.23127,23.227242,0.7669863,0.60466325,2332,149225
