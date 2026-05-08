@@ -44,6 +44,9 @@ The HybridBiLSTMTransformer achieved the best overall RMSE and R², while AQITra
 - `metrics_hybrid_full_test.csv`  
   Full-test HybridBiLSTMTransformer metrics.
 
+- `overall_r2_aqi_vs_hybrid.csv`  
+  Overall R² comparison between AQITransformer, HybridBiLSTMTransformer, and the persistence baseline.
+
 ### Figures
 
 - `overall_rmse_model_vs_baseline.png`  
