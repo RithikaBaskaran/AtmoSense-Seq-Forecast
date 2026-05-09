@@ -595,5 +595,5 @@ If you use this work, please cite:
 ```text
 Suresh, M., Vignesh, R., Baskaran, R., & Datla, S. (2026).
 AtmoSense-Seq-Forecast: Multi-Pollutant AQI Forecasting with a Seq2Seq Transformer.
-MSML612 Course Project, University of Maryland.
+Course Project, University of Maryland.
 ```
