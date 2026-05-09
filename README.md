@@ -122,10 +122,8 @@ The folder contains:
 
 ```text
 AQI_Project/
-├── data/                    ← per-station CSV files
 ├── checkpoints/             ← AQITransformer best_model.pt and all_scaler.pkl
 ├── checkpoints_hybrid/      ← HybridBiLSTMTransformer best_model.pt and all_scaler.pkl
-├── experiment_logs/         ← training_log.txt for both runs
 └── final_results/           ← cached prediction arrays and evaluation CSVs
 ```
 
