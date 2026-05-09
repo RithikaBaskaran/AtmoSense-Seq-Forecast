@@ -2,6 +2,9 @@
 
 AtmoSense-Seq-Forecast is a multi-pollutant air quality forecasting project using hourly India CPCB monitoring data. Given the past 72 hours of pollutant readings, the system forecasts the next 48 hours for 11 pollutants jointly.
 
+Unlike traditional AQI forecasting approaches that predict pollutants independently,
+AtmoSense jointly models all 11 pollutants to learn cross-pollutant temporal relationships.
+
 The project compares two architectures:
 
 - **AQITransformer**: an encoder-decoder Transformer for joint multi-pollutant forecasting
@@ -63,7 +66,7 @@ tqdm==4.66.1
 ```
 
 The project was developed using Google Colab (A100 GPU) and the UMD Zaratan HPC cluster.
-All evaluation notebooks assume a Colab-style Google Drive mount path.
+All evaluation notebooks assume a standard Google Colab Google Drive mount path.
 ---
 
 ## Dataset
