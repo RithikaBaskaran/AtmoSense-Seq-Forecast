@@ -8,7 +8,7 @@ The actual data and model artifacts are stored in Google Drive because they are 
 
 Use the shared project folder:
 
-https://drive.google.com/drive/folders/1FoA62gJLeSTH15AsRnVHR7pYGsUivXuP?usp=sharing
+https://drive.google.com/drive/folders/1XZBbmAVXw3Lv4kH3NvAOKX7yhi5Daqao?usp=sharing
 
 To reproduce the results:
 
@@ -29,6 +29,7 @@ The evaluation notebook and scripts expect this path by default.
 ```text
 AQI_Project/
 ├── data/
+├── training_logs/
 ├── checkpoints/
 │   ├── best_model.pt
 │   ├── all_scaler.pkl
