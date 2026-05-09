@@ -282,10 +282,13 @@ If using a different path, update the path constants in the notebook.
 
 ## Contributors
 
-- **Murugavel Suresh** — Data preprocessing and dataset pipeline
-- **Rithika Baskaran** — Model architecture
-- **Sreya Datla** — Training pipeline and checkpointing
-- **Ravi Vignesh** — Evaluation, metrics, visualizations, and final result analysis
+| Name | Role | Contribution |
+|------|------|-------------|
+| **Murugavel Suresh** | Data Engineer | Data preprocessing, quality filtering, interpolation, sliding-window pipeline (`dataset.py`) |
+| **Rithika Baskaran** | Model Architect | AQITransformer and HybridBiLSTMTransformer architecture design and implementation (`model.py`) |
+| **Sreya Datla** | Training Engineer | Training loop, LR warmup, early stopping, resume checkpointing, Zaratan HPC runs (`train.py`) |
+| **Ravi Vignesh** | Evaluation and Visualisation | Full-test evaluation, MAE/RMSE/R² metrics, all figures and comparison plots (`evaluate.py`) |
+
 
 ---
 
