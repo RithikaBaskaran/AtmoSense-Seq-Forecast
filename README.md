@@ -109,7 +109,7 @@ in this GitHub repository due to file size limits. They are available in the sha
 Drive folder:
 
 **Shared Google Drive — AQI_Project:**
-[Google Drive — AQI\_Project Shared Folder](https://drive.google.com/drive/folders/1FoA62gJLeSTH15AsRnVHR7pYGsUivXuP?usp=sharing)
+[Google Drive — AQI\_Project Shared Folder](https://drive.google.com/drive/folders/1XZBbmAVXw3Lv4kH3NvAOKX7yhi5Daqao?usp=sharing)
 
 Copy the entire `AQI_Project` folder to your own Google Drive before running any notebook.
 The expected path inside Colab is:
