@@ -71,62 +71,47 @@ All evaluation notebooks assume a standard Google Colab Google Drive mount path.
 
 ## Dataset
 
-This project uses hourly air quality monitoring data from India's Central Pollution Control
-Board (CPCB), sourced through the Kaggle dataset:
+Download the dataset from Kaggle:
 
 **Time Series Air Quality Data of India (2010–2023)**
 https://www.kaggle.com/datasets/abhisheksjha/time-series-air-quality-data-of-india-2010-2023
 
-Download the dataset from Kaggle and place all per-station CSV files in:
+After downloading, place all per-station CSV files in:
 
 ```text
 /content/drive/MyDrive/AQI_Project/data/
 ```
 
-The dataset covers 453 monitoring stations across India. After quality filtering, 351
-stations are retained. The model uses 11 pollutant columns:
-
-- PM2.5, PM10, NO, NO2, NOx, NH3, SO2, CO, O3, Benzene, Toluene
-
-<p align="center">
-  <img src="results/figures/figures/pollutant_correlation_heatmap.png"
-       alt="Pollutant Correlation Heatmap" width="400">
-</p>
-
-The preprocessing pipeline:
-1. Filters stations with more than 40% missing data
-2. Drops pollutant columns with more than 50% missing values globally
-3. Applies per-station linear interpolation (never across station boundaries)
-4. Splits chronologically 70% / 15% / 15% by calendar date
-5. Normalises using a single StandardScaler fitted on the training set only
-6. Generates 72-hour input / 48-hour forecast sliding windows with stride 6
+The dataset covers 453 monitoring stations. After quality filtering, 351 stations
+are retained. The model uses 11 pollutant columns:
+PM2.5, PM10, NO, NO2, NOx, NH3, SO2, CO, O3, Benzene, Toluene
 
 ---
+
 ## Checkpoints and Cached Predictions
 
-Trained model checkpoints, scalers, and cached full-test prediction arrays are not stored
-in this GitHub repository due to file size limits. They are available in the shared Google
-Drive folder:
+Trained checkpoints, scalers, and cached predictions are available at:
 
-**Shared Google Drive — AQI_Project:**
 [Google Drive — AQI\_Project Shared Folder](https://drive.google.com/drive/folders/1XZBbmAVXw3Lv4kH3NvAOKX7yhi5Daqao?usp=sharing)
 
-Copy the entire `AQI_Project` folder to your own Google Drive before running any notebook.
-The expected path inside Colab is:
+Copy this folder to your own Google Drive. It will appear at:
 
 ```text
 /content/drive/MyDrive/AQI_Project/
 ```
 
-The folder contains:
+The shared folder contains:
 
 ```text
 AQI_Project/
-├── checkpoints/             ← AQITransformer best_model.pt and all_scaler.pkl
-├── checkpoints_hybrid/      ← HybridBiLSTMTransformer best_model.pt and all_scaler.pkl
-└── final_results/           ← cached prediction arrays and evaluation CSVs
+├── checkpoints/         ← AQITransformer and HybridBiLSTMTransformer best_model.pt and all_scaler.pkl
+├── experiment_logs/     ← training_log.txt for both runs
+└── Final Full Set Evaluation Results/       ← cached prediction arrays and evaluation CSVs
 ```
 
+Note: The raw data CSVs are not in this folder. Download them from Kaggle
+separately and place them at `/content/drive/MyDrive/AQI_Project/data/`
+as described above.
 ---
 
 ## Setup
