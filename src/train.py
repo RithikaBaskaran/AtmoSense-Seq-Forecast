@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, '/content/AtmoSense-Seq-Forecast/src')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dataset import build_dataloaders
 from model import AQITransformer, HybridBiLSTMTransformer
