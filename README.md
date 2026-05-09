@@ -163,7 +163,7 @@ This is the recommended method for quick reproducibility.
 1. Clone the repository.
 2. Install requirements.
 3. Copy the shared `AQI_Project` Google Drive folder to your own Drive.
-4. Open `notebooks/final_full_set_evaluation.ipynb` in Google Colab.
+4. Open `notebooks/04_evaluation_plots` in Google Colab.
 5. Keep the evaluation flags as:
 
 ```python
