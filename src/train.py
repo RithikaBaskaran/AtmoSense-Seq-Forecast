@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, '/content/AtmoSense-Seq-Forecast/src')
 
 from dataset import build_dataloaders
-from model import AQITransformer
+from model import AQITransformer, HybridBiLSTMTransformer
 
 
 def get_args():
@@ -44,6 +44,7 @@ def get_args():
 
     p.add_argument('--num_workers', type=int, default=2)
     p.add_argument('--seed',        type=int, default=42)
+    p.add_argument('--model', type=str, default='transformer', choices=['transformer', 'hybrid'], help='Architecture to train')
     p.add_argument('--stride',      type=int, default=6)
 
     return p.parse_args()
@@ -182,7 +183,20 @@ def main():
     print(f'  train batches : {len(train_loader):,}')
     print(f'  val   batches : {len(val_loader):,}\n')
 
-    model = AQITransformer(
+    if args.model == 'hybrid':
+        model = HybridBiLSTMTransformer(
+        n_features      = n_features,
+        n_targets       = n_targets,
+        seq_len         = args.seq_len,
+        pred_len        = args.pred_len,
+        d_model         = args.d_model,
+        nhead           = args.nhead,
+        num_dec_layers  = args.num_dec_layers,
+        dim_feedforward = args.dim_feedforward,
+        dropout         = args.dropout,
+    ).to(device)
+    else:
+        model = AQITransformer(
         n_features      = n_features,
         n_targets       = n_targets,
         seq_len         = args.seq_len,
